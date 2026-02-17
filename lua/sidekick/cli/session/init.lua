@@ -139,11 +139,16 @@ function M.sessions()
       s.backend = name
       s.started = true
       ret[#ret + 1] = M.new(s)
-      assert(not ids[s.id], "duplicate session id: " .. s.id)
+
+      if ids[s.id] then
+        goto continue
+      end
+      -- assert(not ids[s.id], "duplicate session id: " .. s.id)
       ids[s.id] = true
       if M._attached[s.id] then
         M._attached[s.id] = ret[#ret] -- update to latest session instance
       end
+        ::continue::
     end
   end
   for id in pairs(M._attached) do
