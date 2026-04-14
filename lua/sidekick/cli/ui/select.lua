@@ -24,8 +24,19 @@ function M.select(opts)
   if #tools == 0 then
     Util.warn("No tools match the given filter")
     return
-  elseif #tools == 1 and opts.auto then
+  elseif opts.auto and #tools == 1 then
     on_select(tools[1])
+    return
+  elseif opts.auto and opts.filter and opts.filter.name then
+    -- Prefer the tool entry without a session (starts fresh)
+    local pick = tools[1]
+    for _, t in ipairs(tools) do
+      if not t.session then
+        pick = t
+        break
+      end
+    end
+    on_select(pick)
     return
   end
 
