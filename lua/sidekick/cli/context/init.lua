@@ -8,6 +8,14 @@ local Util = require("sidekick.util")
 
 local M = {}
 
+local function win_cwd(win)
+  if not vim.api.nvim_win_is_valid(win) then
+    return vim.fn.getcwd()
+  end
+  local ok, cwd = pcall(vim.api.nvim_win_call, win, vim.fn.getcwd)
+  return ok and cwd or vim.fn.getcwd()
+end
+
 ---@type table<string, sidekick.context.Fn>
 M.context = {
   position = function(ctx)
@@ -206,7 +214,7 @@ function M.ctx()
   return {
     win = win,
     buf = buf,
-    cwd = vim.fs.normalize(vim.fn.getcwd(win)),
+    cwd = vim.fs.normalize(win_cwd(win)),
     row = cursor[1],
     col = cursor[2] + 1,
     range = M.selection(buf),
