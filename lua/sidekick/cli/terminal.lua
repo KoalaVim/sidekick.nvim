@@ -278,8 +278,14 @@ function M:start()
   self.timer = vim.uv.new_timer()
 
   vim.api.nvim_win_call(self.win, function()
+    local editor_proxy = vim.api.nvim_get_runtime_file("bin/sidekick-editor-proxy", false)[1]
+    local editor_env = {}
+    if editor_proxy then
+      editor_env.EDITOR = editor_proxy
+      editor_env.VISUAL = editor_proxy
+    end
     ---@type table<string, string|false>
-    local env = vim.tbl_extend("force", {}, vim.uv.os_environ(), self.tool.config.env or {}, self.tool.env or {}, {
+    local env = vim.tbl_extend("force", {}, vim.uv.os_environ(), editor_env, self.tool.config.env or {}, self.tool.env or {}, {
       NVIM = vim.v.servername,
       NVIM_LISTEN_ADDRESS = false,
       NVIM_LOG_FILE = false,
