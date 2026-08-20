@@ -3,10 +3,11 @@ local Util = require("sidekick.util")
 
 ---@class sidekick.cli.muxer.Herdr: sidekick.cli.Session
 ---@field herdr_pane_id string
----@field herdr_agent_target string
 local M = {}
 M.__index = M
 
+-- Maps tool names to the agent kinds herdr detects natively.
+-- Only used to resolve agents reported by `herdr agent list` back to a tool.
 -- stylua: ignore
 local tool_to_kind = {
   claude   = "claude",
@@ -24,6 +25,20 @@ local tool_to_kind = {
 ---@return string?
 local function get_kind(tool_name)
   return tool_to_kind[tool_name]
+end
+
+--- Extract a pane id from a `herdr pane split` response.
+--- Results are wrapped as `{id, result = {type = "pane_info", pane = {pane_id}}}`
+---@param raw string
+---@return string?
+local function parse_pane_id(raw)
+  local ok, data = pcall(vim.json.decode, raw)
+  if not ok or type(data) ~= "table" then
+    return nil
+  end
+  local result = type(data.result) == "table" and data.result or data
+  local pane = type(result.pane) == "table" and result.pane or result
+  return pane.pane_id and tostring(pane.pane_id) or nil
 end
 
 ---@param raw string
@@ -50,15 +65,45 @@ function M:init()
   self.priority = self.external and 10 or 50
 end
 
+--- The command that starts the tool in the pane.
+--- Unlike the other backends, the pane is spawned by the herdr server instead of Neovim,
+--- so nothing is inherited from the terminal job and the env has to be set on exec.
+--- Setting it on the pane itself is not enough, since shell startup files run after that.
+---@return string[]
+function M:run_cmd()
+  ---@type table<string, string|false>
+  local env = { NVIM = vim.v.servername }
+  local editor_proxy = vim.api.nvim_get_runtime_file("bin/sidekick-editor-proxy", false)[1]
+  if editor_proxy then
+    env.EDITOR = editor_proxy
+    env.VISUAL = editor_proxy
+  end
+  env = vim.tbl_extend("force", env, self.tool.config.env or {}, self.tool.env or {})
+
+  -- `pane run` joins its arguments into a command line for the pane's shell,
+  -- so anything that ends up there needs to be quoted.
+  -- `exec` replaces the shell, so the pane closes as soon as the tool exits.
+  local ret = { "herdr", "pane", "run", self.herdr_pane_id, "exec", "env" }
+  for key, value in pairs(env) do
+    if value == false then
+      vim.list_extend(ret, { "-u", key })
+    else
+      ret[#ret + 1] = vim.fn.shellescape(("%s=%s"):format(key, tostring(value)))
+    end
+  end
+  for _, arg in ipairs(self.tool.cmd) do
+    ret[#ret + 1] = vim.fn.shellescape(arg)
+  end
+  return ret
+end
+
 ---@return sidekick.cli.terminal.Cmd?
 function M:start()
-  local kind = get_kind(self.tool.name)
-  if not kind then
-    Util.error(("Tool **%s** is not supported by the herdr backend (no kind mapping)"):format(self.tool.name))
-    return
-  end
-
   local split_cmd = { "herdr", "pane", "split" }
+  -- split the pane running Neovim, not whatever pane happens to be focused
+  if vim.env.HERDR_PANE_ID then
+    vim.list_extend(split_cmd, { "--pane", vim.env.HERDR_PANE_ID })
+  end
   local direction = Config.cli.mux.split.vertical and "right" or "down"
   vim.list_extend(split_cmd, { "--direction", direction })
   local size = Config.cli.mux.split.size
@@ -72,28 +117,24 @@ function M:start()
     return
   end
 
-  local ok, split_result = pcall(vim.json.decode, raw)
-  if not ok or type(split_result) ~= "table" then
-    Util.error("Failed to parse herdr pane split output")
-    return
-  end
-  -- pane split wraps in {id, result: {pane_id}}
-  local pane_id = split_result.result and split_result.result.pane_id or split_result.pane_id
+  local pane_id = parse_pane_id(raw)
   if not pane_id then
-    Util.error("Failed to get pane_id from herdr pane split")
+    Util.error(("Failed to get pane_id from herdr pane split:\n%s"):format(raw))
+    return
+  end
+  self.herdr_pane_id = pane_id
+
+  -- a pane next to Neovim is only wanted for `split`. `terminal` shows the tool in a
+  -- Neovim terminal, so the pane is moved out of sight, and `window` gets its own tab
+  if Config.cli.mux.create ~= "split" then
+    self:move_to_tab()
+  end
+
+  if not Util.exec(self:run_cmd(), { notify = true }) then
+    Util.exec({ "herdr", "pane", "close", self.herdr_pane_id }, { notify = false })
     return
   end
 
-  self.herdr_pane_id = tostring(pane_id)
-
-  local start_cmd = { "herdr", "agent", "start", self.tool.name, "--kind", kind, "--pane", self.herdr_pane_id }
-
-  local start_lines = Util.exec(start_cmd, { notify = true })
-  if not start_lines then
-    return
-  end
-
-  self.herdr_agent_target = self.herdr_pane_id
   self.id = "herdr:" .. self.herdr_pane_id
   self.started = true
 
@@ -101,7 +142,20 @@ function M:start()
     return { cmd = { "herdr", "agent", "attach", self.herdr_pane_id } }
   end
 
-  Util.info(("Started **%s** in a herdr pane"):format(self.tool.name))
+  Util.info(
+    ("Started **%s** in a herdr %s"):format(self.tool.name, Config.cli.mux.create == "split" and "split" or "tab")
+  )
+end
+
+--- Move the pane to a tab of its own, keeping the focus where it is
+function M:move_to_tab()
+  if not Util.exec({ "herdr", "pane", "move", self.herdr_pane_id, "--new-tab" }, { notify = true }) then
+    return
+  end
+  -- `pane move --new-tab` focuses the tab it created
+  if vim.env.HERDR_TAB_ID then
+    Util.exec({ "herdr", "tab", "focus", vim.env.HERDR_TAB_ID }, { notify = false })
+  end
 end
 
 function M:send(text)
@@ -122,30 +176,24 @@ end
 function M:detach() end
 
 function M:is_running()
-  local _, raw = Util.exec({ "herdr", "agent", "list" }, { notify = false })
-  if not raw then
+  if not self.herdr_pane_id then
     return false
   end
-  local agents = parse_agent_list(raw)
-  if not agents then
-    return false
-  end
-  for _, agent in ipairs(agents) do
-    if tostring(agent.pane_id) == self.herdr_pane_id then
-      return true
-    end
-  end
-  return false
+  -- the tool replaced the pane's shell, so the pane lives exactly as long as the tool
+  return Util.exec({ "herdr", "pane", "get", self.herdr_pane_id }, { notify = false }) ~= nil
 end
 
 function M:dump()
-  if not self.herdr_agent_target then
+  if not self.herdr_pane_id then
     return
   end
-  local _, raw = Util.exec(
-    { "herdr", "agent", "read", self.herdr_agent_target, "--source", "recent", "--ansi" },
-    { notify = false }
-  )
+  -- stylua: ignore
+  local _, raw = Util.exec({
+    "herdr", "pane", "read", self.herdr_pane_id,
+    "--source", "recent",
+    "--lines", tostring(Config.cli.mux.dump),
+    "--ansi",
+  }, { notify = false })
   return raw
 end
 
@@ -159,9 +207,8 @@ function M.sessions()
     return {}
   end
 
-  local tools = Config.tools()
-  local kind_to_tool = {}
-  for name, _ in pairs(tools) do
+  local kind_to_tool = {} ---@type table<string, string>
+  for name in pairs(Config.tools()) do
     local kind = get_kind(name)
     if kind then
       kind_to_tool[kind] = name
@@ -178,7 +225,6 @@ function M.sessions()
         cwd = agent.cwd or "",
         tool = tool_name,
         herdr_pane_id = pane_id,
-        herdr_agent_target = pane_id,
         mux_session = tool_name,
         pids = {},
       }
