@@ -1,0 +1,16 @@
+name: Sync
+on:
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+jobs:
+  run-sync:
+    uses: KoalaVim/actions-internal/.github/workflows/rebase-plugin.yml@master
+    with:
+      upstream_repo: "folke/sidekick.nvim"
+      plugin_name: "sidekick.nvim"
+      tracking_issue_number: "93"
+    secrets:
+      KOALA_APP_ID: ${{ secrets.KOALA_APP_ID }}
+      KOALA_APP_PRIVATE_KEY: ${{ secrets.KOALA_APP_PRIVATE_KEY }}
