@@ -100,6 +100,24 @@ defect here means updating the owning spec in the same change. Each entry names 
   `development-tooling` requirements back to the stricter claim.
 - Spec: `plugin-diagnostics`, `development-tooling`.
 
+### `pi-vim` swallows a bracketed paste while in normal mode
+
+- Not a sidekick defect and not a `pi` defect: the modal composer comes from the third-party
+  `pi-vim` extension (`github.com/lajarre/pi-vim`), and `pi` without it loaded is unaffected.
+- Measured on a fresh `pi` with an empty composer in normal mode: an unframed payload has its
+  leading `l` and `i` consumed as commands and the remainder inserted, while a payload framed as
+  a bracketed paste (`ESC [ 200 ~` … `ESC [ 201 ~`) produces nothing at all. Both cells work when
+  the composer is already in insert mode.
+- Every first-party composer compared against handles the framing correctly: claude and codex
+  insert the full payload, and codex additionally leaves the editor in `Vim: Normal`, which is
+  the intended semantics — a bracketed paste is a text-insertion event and should not be routed
+  through a mode machine. cursor, which loses an unframed payload entirely, also accepts a
+  framed one.
+- Sidekick frames unconditionally rather than working around this, so a `pi-vim` user sending
+  from normal mode gets nothing delivered instead of a payload missing its first two characters.
+  Non-destructive and recoverable by entering insert mode and resending.
+- Spec: `herdr-mux-backend`, `mux-session-backends`.
+
 ## Documentation drift
 
 ### README prompt list is stale

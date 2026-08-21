@@ -95,8 +95,13 @@ the session runs in a Neovim terminal, and otherwise SHALL detach the session an
 `Detached from` the tool. Enumerating sessions SHALL detach every session that is recorded as
 attached but is no longer reported as running, so the attached set never outlives the
 processes behind it. Attaching a session with no terminal of its own SHALL report
-`Attached to` the tool when that call performed the attach. When `show` was requested the terminal SHALL be shown, and it SHALL
-be focused unless focus was explicitly declined or the terminal is not running.
+`Attached to` the tool when that call performed the attach. When `show` was requested the
+session's surface SHALL be shown, and it SHALL be focused unless focus was explicitly declined:
+for a session hosted in a Neovim terminal that means showing and focusing the terminal, and
+only when the terminal is running; for a session with no terminal of its own that means asking
+the session to focus itself, which reaches the multiplexer pane the session actually lives in.
+Focusing SHALL NOT be conditional on this call having performed the attach, so a repeated
+request against an already attached session focuses it again.
 
 #### Scenario: First attach starts a session
 
@@ -107,6 +112,21 @@ be focused unless focus was explicitly declined or the terminal is not running.
 
 - **WHEN** an already started external session is attached and it needs no Neovim terminal
 - **THEN** an informational message SHALL report that sidekick attached to the tool, and `SidekickCliAttach` SHALL be emitted
+
+#### Scenario: Showing a session that has no terminal
+
+- **WHEN** a session with no Neovim terminal is attached with `show` requested and focus not declined
+- **THEN** the session SHALL be asked to focus itself, so the multiplexer pane hosting it comes in front of the user
+
+#### Scenario: Repeated request against an attached session
+
+- **WHEN** a session that sidekick is already attached to is resolved again with `show` requested
+- **THEN** it SHALL be focused again, even though no attach was performed
+
+#### Scenario: Focus declined
+
+- **WHEN** a session is attached with `show` requested and `focus = false`
+- **THEN** the session SHALL be shown and SHALL NOT be focused, whether or not it has a terminal
 
 #### Scenario: Closing a terminal-hosted mux session
 
