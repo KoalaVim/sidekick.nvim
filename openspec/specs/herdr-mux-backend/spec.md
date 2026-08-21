@@ -8,7 +8,7 @@ Defines requirements for the herdr multiplexer backend, enabling sidekick to man
 
 ### Requirement: Herdr backend registration
 
-The system SHALL register a herdr mux backend when the `herdr` executable is found in `PATH` and `HERDR_ENV=1` is set. The backend SHALL be registered alongside tmux and zellij in `session/init.lua`. When herdr is not available, the backend SHALL NOT be registered and no errors SHALL occur.
+The system SHALL register a herdr mux backend when the `herdr` executable is found in `PATH`, alongside the tmux and zellij backends. Registration SHALL depend only on the executable being present and SHALL NOT depend on `HERDR_ENV`, so the backend stays available for explicit selection outside a herdr environment. When `herdr` is absent the backend SHALL NOT be registered, and registration itself SHALL raise no error; selecting an unregistered backend is a separate failure covered by the CLI session management capability.
 
 #### Scenario: Herdr available and running inside herdr
 - **WHEN** `herdr` is executable and `HERDR_ENV` equals `1`
@@ -16,7 +16,7 @@ The system SHALL register a herdr mux backend when the `herdr` executable is fou
 
 #### Scenario: Herdr not installed
 - **WHEN** `herdr` is not found in PATH
-- **THEN** the herdr backend SHALL NOT be registered and the system SHALL fall back to other backends
+- **THEN** the herdr backend SHALL NOT be registered, and backend registration SHALL complete without error
 
 #### Scenario: Not running inside herdr
 - **WHEN** `herdr` is executable but `HERDR_ENV` is not set
