@@ -194,8 +194,16 @@ function M.attach(state, opts)
         terminal:focus()
       end
     end
-  elseif attached then
-    Util.info("Attached to `" .. state.tool.name .. "`")
+  else
+    if attached then
+      Util.info("Attached to `" .. state.tool.name .. "`")
+    end
+    -- the session lives in a mux pane rather than a Neovim window, so bringing it in front
+    -- of the user is the backend's job. Deliberately not gated on `attached`: a second send
+    -- to an already attached session has to focus it too.
+    if opts.show and opts.focus ~= false then
+      session:focus()
+    end
   end
   return state, attached
 end

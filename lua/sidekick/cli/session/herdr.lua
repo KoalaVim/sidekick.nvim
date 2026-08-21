@@ -18,6 +18,18 @@ local SOURCE = "sidekick"
 --- Unlike the sidebar label, it carries no TTL: it has to outlive Neovim to be useful.
 local TOKEN = "sidekick"
 
+--- Bracketed paste framing for `pane send-text`, which writes its bytes to the pane tty
+--- unmodified. An unframed payload is therefore indistinguishable from typing: a tool with a
+--- modal composer runs it through its mode machine, consuming the leading characters as
+--- commands and inserting only the remainder. Framing makes it a paste, which an input layer
+--- inserts as text regardless of the mode it is in.
+local PASTE_START = "\27[200~"
+local PASTE_END = "\27[201~"
+
+--- Cap on a single socket round trip. herdr's socket is a local unix socket, so this is a
+--- stuck-server backstop rather than an expected wait.
+local SOCKET_TIMEOUT = 200 -- ms
+
 --- The sidebar label is refreshed on a timer, so a Neovim that dies without tearing down
 --- stops labelling its pane. `pane report-agent` takes no TTL, so the registration itself
 --- is reaped by `M.sessions()` instead.
@@ -94,6 +106,63 @@ local function parse_agent_list(raw)
     return result.agents
   end
   return nil
+end
+
+--- Issue one request against herdr's socket API and wait briefly for its response.
+--- `M.watch` streams events and never needs a reply; this is the request/response half.
+--- The socket is the only route to methods the CLI does not expose, such as `pane.focus`.
+---@param method string
+---@param params table
+---@return boolean ok whether herdr answered without an error
+local function request(method, params)
+  local path = vim.env.HERDR_SOCKET_PATH
+  if not path then
+    return false
+  end
+  local pipe = vim.uv.new_pipe(false)
+  if not pipe then
+    return false
+  end
+
+  local done, ok = false, false
+  local function finish(result)
+    if not done then
+      done, ok = true, result
+    end
+    pcall(function()
+      pipe:read_stop()
+    end)
+    if not pipe:is_closing() then
+      pipe:close()
+    end
+  end
+
+  pipe:connect(path, function(err)
+    if err then
+      return finish(false)
+    end
+    local buf = ""
+    pipe:read_start(function(read_err, data)
+      if read_err or not data then
+        return finish(false)
+      end
+      buf = buf .. data
+      local line = buf:match("^([^\n]*)\n")
+      if not line then
+        return -- response not complete yet
+      end
+      local decoded, msg = pcall(vim.json.decode, line)
+      finish(decoded and type(msg) == "table" and msg.error == nil)
+    end)
+    pipe:write(vim.json.encode({ id = "sidekick:" .. method, method = method, params = params }) .. "\n")
+  end)
+
+  -- bounded so focus resolves before the text is sent, without hanging on a stuck server
+  vim.wait(SOCKET_TIMEOUT, function()
+    return done
+  end, 5)
+  finish(false)
+  return ok
 end
 
 function M:init()
@@ -429,11 +498,34 @@ function M.reap(pane_id, label)
   }, { notify = false })
 end
 
+--- Bring the session's pane in front of the user. Best effort: a failure is silent, so it
+--- never raises a notification on every send.
+---
+--- `pane.focus` and not `herdr agent focus`: the latter resolves against herdr's agent
+--- registry, which reports a freshly started tool only after ~600ms (measured), so it would
+--- miss the very send that creates the session and work on every one after it. Targeting the
+--- pane has nothing to detect, and also covers a tool herdr never sees as an agent.
+function M:focus()
+  if self.herdr_embedded or not self.herdr_pane_id then
+    -- the tool runs in a Neovim terminal, which the terminal window focuses itself, and
+    -- Neovim's own pane is already where the user is
+    return
+  end
+  if request("pane.focus", { pane_id = self.herdr_pane_id }) then
+    return
+  end
+  -- no socket in the environment: the CLI resolves herdr's socket on its own, at the cost of
+  -- resolving through the agent registry again
+  Util.exec({ "herdr", "agent", "focus", self.herdr_pane_id }, { notify = false })
+end
+
 function M:send(text)
   if self.herdr_embedded then
     return -- the tool runs in a Neovim terminal; sending here would type into Neovim
   end
-  Util.exec({ "herdr", "pane", "send-text", self.herdr_pane_id, text })
+  -- the trailing newline stays inside the framing, so it is a newline in the input
+  -- rather than a submit. `submit()` is what sends Enter.
+  Util.exec({ "herdr", "pane", "send-text", self.herdr_pane_id, PASTE_START .. text .. PASTE_END })
 end
 
 function M:submit()

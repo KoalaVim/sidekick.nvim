@@ -64,6 +64,11 @@ function B:attach() end
 --- Detach from an existing session
 function B:detach() end
 
+--- Bring the session's own surface in front of the user.
+--- Backends whose multiplexer offers no way to focus a named pane leave this alone, so
+--- callers need no backend-specific knowledge.
+function B:focus() end
+
 --- Start a new session
 --- If the backend returns a Cmd, a new terminal session will be spawned
 ---@return sidekick.cli.terminal.Cmd?
