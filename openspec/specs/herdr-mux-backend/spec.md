@@ -36,27 +36,83 @@ The mux config SHALL auto-detect herdr as the preferred backend when `HERDR_ENV=
 
 ### Requirement: Agent start in herdr pane
 
-The backend's `start()` method SHALL create a new herdr pane via `herdr pane split` and start the tool in it via `herdr pane run <pane_id> exec env <env> <cmd>`, built from the tool's own command. It SHALL NOT use `herdr agent start`: herdr detects the agent natively once it runs, so no start handshake is needed, and typing the command into the pane's shell would leave that shell owning the pane. The pane id SHALL be read from the `herdr pane split` response at `result.pane.pane_id`. In embedded mode (`create = "terminal"`), `start()` SHALL return a `Cmd` containing `herdr agent attach <pane_id>` so that sidekick hosts the agent inside a Neovim terminal buffer.
-
-#### Scenario: Start agent in embedded mode
-- **WHEN** `mux.create` is `"terminal"` and the user starts a new agent session
-- **THEN** the backend SHALL split a herdr pane, run the tool in it, and return a `Cmd` with `herdr agent attach` so the agent appears inside Neovim
+For `mux.create = "split"` and `"window"`, the backend SHALL create a pane via `herdr pane split` and start the tool in it via `herdr pane run <pane_id> exec env <env> <cmd>`, built from the tool's own command, and SHALL NOT use `herdr agent start`. The pane id SHALL be read from `result.pane.pane_id`. These sessions SHALL be external and SHALL rely on herdr's native detection. For `mux.create = "terminal"` no pane SHALL be created and no attach command SHALL be returned.
 
 #### Scenario: Start agent in split mode
 - **WHEN** `mux.create` is `"split"` and the user starts a new agent session
-- **THEN** the backend SHALL split a herdr pane alongside the current pane, run the tool in it, and NOT return a `Cmd` (the session is external)
+- **THEN** the backend SHALL split a herdr pane, run the tool in it, and the session SHALL be external
 
-#### Scenario: Herdr detects the agent natively
-- **WHEN** an agent is started via the herdr backend
-- **THEN** `herdr agent list` SHALL show the agent with correct status and session identity
+#### Scenario: Start agent in window mode
+- **WHEN** `mux.create` is `"window"` and the user starts a new agent session
+- **THEN** the backend SHALL split a pane, move it to its own tab, and the session SHALL be external
 
-#### Scenario: Start is not raced by shell startup
-- **WHEN** the tool is started immediately after the pane is created, before the pane's shell has reached its prompt
-- **THEN** the tool SHALL still start, without an `agent_pane_busy` failure
+#### Scenario: Herdr detects native sessions
+- **WHEN** an agent is started in a herdr pane
+- **THEN** `herdr agent list` SHALL show the agent with correct status and session identity, without a start handshake
 
 #### Scenario: Start failure
 - **WHEN** `herdr pane split` returns no pane id, or running the tool in the pane fails
-- **THEN** the backend SHALL report the error, including the offending output, close the pane it created, and the session SHALL NOT be marked as started
+- **THEN** the backend SHALL report the error including the offending output, close the pane it created, and the session SHALL NOT be marked as started
+
+### Requirement: Embedded sessions run in Neovim, not in a herdr pane
+
+For `mux.create = "terminal"` the backend SHALL NOT create a herdr pane. The tool SHALL run in a Neovim terminal, and the backend SHALL NOT return a `herdr agent attach` command. Herdr cannot natively detect an agent running inside a Neovim terminal, because Neovim gives its terminal child a separate controlling tty and herdr admits agents from the pane's tty foreground process group; this limitation SHALL be accepted rather than worked around.
+
+#### Scenario: Embedded start creates no pane and no tab
+- **WHEN** `mux.create` is `"terminal"` and the user starts a new agent session
+- **THEN** no new herdr pane or tab SHALL be created, and the tool SHALL appear only in the Neovim terminal
+
+#### Scenario: No attach race
+- **WHEN** an embedded session starts
+- **THEN** no `herdr agent attach` SHALL be spawned, and the session SHALL NOT fail with `agent_not_found`
+
+#### Scenario: No pane is resized
+- **WHEN** an embedded session starts
+- **THEN** no herdr pane's viewport SHALL be resized to the Neovim terminal's dimensions
+
+### Requirement: Embedded sessions are registered on Neovim's own pane
+
+The backend SHALL register an embedded session as a herdr agent on `$HERDR_PANE_ID` using `herdr pane report-agent` with a source that is not one of herdr's registered integration sources, because herdr corroboration-gates `herdr:*` sources and rejects them for a pane whose foreground process is not the agent. The backend SHALL also set display metadata via `herdr pane report-metadata`, including a TTL so a crashed Neovim does not leave a stale agent.
+
+#### Scenario: Session appears in herdr's agent list
+- **WHEN** an embedded session has started
+- **THEN** `herdr agent list` SHALL report an agent on Neovim's pane for that tool
+
+#### Scenario: Sidebar navigation lands on Neovim
+- **WHEN** the user focuses that agent from herdr's sidebar
+- **THEN** focus SHALL move to the pane running Neovim, which is the pane hosting the session
+
+#### Scenario: Registered source is accepted
+- **WHEN** the backend reports the agent
+- **THEN** it SHALL use a source outside herdr's registered integration sources, and the report SHALL be admitted
+
+#### Scenario: One embedded registration per Neovim
+- **WHEN** a second embedded session is started in the same Neovim instance
+- **THEN** it SHALL still run, SHALL NOT overwrite the first session's registration, and the reason SHALL be reported
+
+#### Scenario: Teardown
+- **WHEN** an embedded session ends normally
+- **THEN** the backend SHALL release the agent, clear its display metadata, and clear its pane token
+
+#### Scenario: Crash backstop
+- **WHEN** Neovim exits without running teardown
+- **THEN** the reported metadata SHALL expire by its TTL rather than persisting indefinitely
+
+### Requirement: The embedded tool must not claim Neovim's pane
+
+The backend SHALL unset `HERDR_PANE_ID` for an embedded tool, so the tool's herdr integration exits early and cannot report an agent session for Neovim's pane. `HERDR_ENV` and `HERDR_SOCKET_PATH` SHALL remain set. This is required because a pane carrying an agent session claim rejects every subsequent `pane report-agent` from any source, and the claim cannot be cleared — not by `release-agent`, and not by `pane.clear_agent_authority`.
+
+#### Scenario: Hook does not claim the pane
+- **WHEN** an embedded tool whose herdr integration is installed starts
+- **THEN** Neovim's pane SHALL carry no agent session claim, and sidekick's own report SHALL be admitted
+
+#### Scenario: Remaining herdr context is preserved
+- **WHEN** an embedded tool runs
+- **THEN** it SHALL still see `HERDR_ENV` and `HERDR_SOCKET_PATH`
+
+#### Scenario: Agent-session resume is forfeited
+- **WHEN** an embedded session is registered
+- **THEN** no agent session id or transcript path SHALL be reported, and herdr's session resume SHALL NOT cover that session
 
 ### Requirement: Environment for the herdr pane
 
@@ -76,17 +132,17 @@ The herdr pane is spawned by the herdr server instead of a Neovim terminal job, 
 
 ### Requirement: Pane placement per create mode
 
-Pane placement SHALL follow `mux.create`, so that a session is never visible twice:
+Pane placement SHALL follow `mux.create`:
 
-- `terminal`: the pane SHALL be moved to a tab of its own, and the tool SHALL be shown in a Neovim terminal that attaches to it
-- `split`: the pane SHALL stay next to Neovim in the current tab, and the session SHALL be external
-- `window`: the pane SHALL be moved to a tab of its own, and the session SHALL be external
+- `terminal`: no herdr pane SHALL be created; the tool runs in a Neovim terminal and is registered on Neovim's own pane
+- `split`: a pane SHALL stay next to Neovim in the current tab, and the session SHALL be external
+- `window`: a pane SHALL be moved to a tab of its own, and the session SHALL be external
 
-New panes SHALL be split from `$HERDR_PANE_ID`, the pane running Neovim, rather than from the focused pane. Whenever a pane is moved to a new tab, the backend SHALL restore focus to `$HERDR_TAB_ID`, because `herdr pane move --new-tab` focuses the tab it creates.
+New panes SHALL be split from `$HERDR_PANE_ID`, the pane running Neovim, rather than from the focused pane. A pane moved to a new tab SHALL be moved with `--no-focus`; pane ids are stable across a move within the same workspace, so the stored pane id SHALL remain valid.
 
-#### Scenario: Embedded mode shows one copy
+#### Scenario: Embedded mode creates no pane
 - **WHEN** `mux.create` is `"terminal"` and the user starts a new agent session
-- **THEN** the herdr pane SHALL live in a tab of its own and the only visible copy SHALL be the Neovim terminal attached to it
+- **THEN** no herdr pane SHALL be created and the only copy SHALL be the Neovim terminal
 
 #### Scenario: Split mode stays next to Neovim
 - **WHEN** `mux.create` is `"split"` and the user starts a new agent session
@@ -98,7 +154,7 @@ New panes SHALL be split from `$HERDR_PANE_ID`, the pane running Neovim, rather 
 
 #### Scenario: Focus is not stolen
 - **WHEN** the backend moves an agent pane to a new tab
-- **THEN** the focused tab SHALL still be the tab that runs Neovim
+- **THEN** the move SHALL be requested with `--no-focus` and the focused tab SHALL still be the tab that runs Neovim
 
 #### Scenario: Split target is Neovim's pane
 - **WHEN** a session is started while another herdr pane is focused
@@ -106,11 +162,11 @@ New panes SHALL be split from `$HERDR_PANE_ID`, the pane running Neovim, rather 
 
 ### Requirement: Pane lifetime matches the tool
 
-The backend SHALL start the tool with `exec`, replacing the pane's shell, so that the pane's lifetime matches the tool's.
+For a native session, the backend SHALL start the tool with `exec`, replacing the pane's shell, so that the pane's lifetime matches the tool's. An embedded session has no herdr pane of its own, so this requirement does not apply to it.
 
 #### Scenario: Tool exits
 - **WHEN** the tool running in a herdr pane exits
-- **THEN** the pane SHALL close, no leftover shell prompt SHALL remain, and any `herdr agent attach` client SHALL exit with it
+- **THEN** the pane SHALL close and no leftover shell prompt SHALL remain
 
 ### Requirement: Send text to agent
 
@@ -126,19 +182,47 @@ The backend's `send()` method SHALL send text to the agent's herdr pane using `h
 
 ### Requirement: Session discovery
 
-The backend's `sessions()` method SHALL discover running agent sessions by querying `herdr agent list` and matching results against sidekick's configured tools. Each discovered agent SHALL be returned as a session state with correct tool, cwd, and pane information.
+The backend's `sessions()` method SHALL discover running agent sessions via `herdr agent list` and match them against sidekick's configured tools. A discovered session lives in a herdr pane, so it SHALL be external: sidekick SHALL drive it over herdr's pane API and SHALL NOT open a Neovim terminal for it. The `mux_session` of a discovered session SHALL identify its pane; the bare tool name SHALL NOT be used, because it is the same for every pane running that tool. Where a pane carries sidekick's ownership token, that token SHALL be reported as ownership information; it SHALL NOT make the session embeddable.
 
 #### Scenario: Discover running agents
 - **WHEN** sidekick queries for active sessions
 - **THEN** the herdr backend SHALL return all agents from `herdr agent list` that match configured sidekick tools
 
+#### Scenario: Reattach after Neovim restart
+- **WHEN** Neovim restarts and a sidekick-owned agent is still running in a herdr pane
+- **THEN** `sessions()` SHALL rediscover it as external, and selecting it SHALL attach to it in place without opening a Neovim terminal or resizing its pane
+
+#### Scenario: Ownership survives via pane token
+- **WHEN** a sidekick-started pane is rediscovered after a Neovim restart
+- **THEN** its `sidekick` pane token SHALL identify it as sidekick-owned
+
+#### Scenario: Hand-started agent stays external
+- **WHEN** the user started an agent in a herdr pane themselves
+- **THEN** it SHALL be discovered and reported as external
+
 #### Scenario: Agent no longer running
 - **WHEN** an agent pane has been closed in herdr
 - **THEN** the agent SHALL NOT appear in `sessions()` results and sidekick SHALL prune its attached session
 
-#### Scenario: Reattach after Neovim restart
-- **WHEN** Neovim restarts and an agent is still running in a herdr pane
-- **THEN** `sessions()` SHALL rediscover it and sidekick SHALL allow reattaching
+### Requirement: Session status
+
+A session SHALL carry a status of `idle`, `working`, `blocked` or `unknown`, defaulting to `unknown`. For embedded sessions the backend SHALL own that status and report each transition to herdr, because herdr does not drive status for an externally reported agent. For native sessions the status SHALL come from herdr, via a subscription to its agent status change event where available.
+
+#### Scenario: Embedded status is driven by sidekick
+- **WHEN** an embedded session's tool begins or finishes work
+- **THEN** the backend SHALL report the new state to herdr, and `herdr agent list` SHALL reflect it
+
+#### Scenario: Native status is pushed by herdr
+- **WHEN** a native session's agent changes state
+- **THEN** the backend SHALL learn the new status from herdr's event stream rather than by polling
+
+#### Scenario: Status is not guessed
+- **WHEN** the backend has no signal for a session's state
+- **THEN** the status SHALL be `unknown` rather than an assumed value
+
+#### Scenario: Event stream unavailable
+- **WHEN** the status subscription cannot be established
+- **THEN** the backend SHALL continue to function, with status left `unknown`
 
 ### Requirement: Session liveness check
 
@@ -163,14 +247,6 @@ The backend's `dump()` method SHALL capture the pane's terminal output via `herd
 #### Scenario: Capture scrollback
 - **WHEN** sidekick requests scrollback for a herdr session
 - **THEN** the backend SHALL return the pane's recent terminal output with ANSI formatting, limited to `cli.mux.dump` lines
-
-### Requirement: Attach to existing session
-
-The backend's `attach()` method SHALL return a `Cmd` with `herdr agent attach <pane_id>` when the session's mux_session matches the stored identifier, enabling reattachment via a Neovim terminal buffer.
-
-#### Scenario: Reattach to existing agent
-- **WHEN** a previously discovered herdr session is selected for attachment
-- **THEN** the backend SHALL return a `Cmd` with `herdr agent attach` so sidekick embeds the agent in a Neovim terminal
 
 ### Requirement: Detach from session
 
