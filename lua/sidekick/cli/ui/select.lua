@@ -28,16 +28,24 @@ function M.select(opts)
     on_select(tools[1])
     return
   elseif opts.auto and opts.filter and opts.filter.name then
-    -- Prefer the tool entry without a session (starts fresh)
-    local pick = tools[1]
+    -- A session already running in this cwd is the one that was asked for, so attach to
+    -- it instead of starting a second one beside it. This matters most for an external
+    -- mux session: that is a live pane, so starting fresh leaves the user with two.
+    local cwd = require("sidekick.cli.session").cwd()
     for _, t in ipairs(tools) do
-      if not t.session then
-        pick = t
-        break
+      if t.session and t.session.cwd == cwd then
+        on_select(t)
+        return
       end
     end
-    on_select(pick)
-    return
+    -- nothing is running here, so start fresh
+    for _, t in ipairs(tools) do
+      if not t.session then
+        on_select(t)
+        return
+      end
+    end
+    -- only sessions from other cwds are left: let the user pick rather than adopting one
   end
 
   ---@type snacks.picker.ui_select.Opts
