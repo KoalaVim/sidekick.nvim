@@ -76,6 +76,19 @@ function M.check()
     end
   end
 
+  if Config.cli.mux.backend == "herdr" and vim.fn.executable("herdr") == 1 and vim.env.HERDR_ENV then
+    -- An embedded herdr session is registered with `pane report-agent` from a source
+    -- herdr does not know. That herdr accepts such a source is not part of its documented
+    -- contract, so probe it: if a future herdr gates every source, `mux.create =
+    -- "terminal"` degrades to a plain Neovim terminal and this is the only warning.
+    local herdr_ok, msg = require("sidekick.cli.session.herdr").probe()
+    if herdr_ok then
+      ok(msg)
+    else
+      warn(msg .. '\n`cli.mux.create = "terminal"` still works, but herdr won\'t show the session')
+    end
+  end
+
   if vim.fn.has("win32") == 0 then
     for _, c in ipairs({ "ps", "lsof" }) do
       if vim.fn.executable(c) == 1 then

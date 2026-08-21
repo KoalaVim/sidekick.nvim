@@ -134,7 +134,7 @@ For `mux.create = "split"` and `"window"`, the backend SHALL create a pane via `
 
 ### Requirement: Session discovery
 
-The backend's `sessions()` method SHALL discover running agent sessions via `herdr agent list` and match them against sidekick's configured tools. The `mux_session` of a discovered session SHALL be derived so that it equals the session's `sid` when the session is one sidekick owns, and differs otherwise — the bare tool name SHALL NOT be used, because it can never equal a `sid` and would force every discovered session to be external and unattachable. Where a pane carries sidekick's ownership token, that token SHALL take precedence over any cwd-based heuristic.
+The backend's `sessions()` method SHALL discover running agent sessions via `herdr agent list` and match them against sidekick's configured tools. A discovered session lives in a herdr pane, so it SHALL be external: sidekick SHALL drive it over herdr's pane API and SHALL NOT open a Neovim terminal for it. The `mux_session` of a discovered session SHALL identify its pane; the bare tool name SHALL NOT be used, because it is the same for every pane running that tool. Where a pane carries sidekick's ownership token, that token SHALL be reported as ownership information; it SHALL NOT make the session embeddable.
 
 #### Scenario: Discover running agents
 - **WHEN** sidekick queries for active sessions
@@ -142,7 +142,7 @@ The backend's `sessions()` method SHALL discover running agent sessions via `her
 
 #### Scenario: Reattach after Neovim restart
 - **WHEN** Neovim restarts and a sidekick-owned agent is still running in a herdr pane
-- **THEN** `sessions()` SHALL rediscover it, it SHALL NOT be forced external, and `attach()` SHALL return a command that embeds it
+- **THEN** `sessions()` SHALL rediscover it as external, and selecting it SHALL attach to it in place without opening a Neovim terminal or resizing its pane
 
 #### Scenario: Ownership survives via pane token
 - **WHEN** a sidekick-started pane is rediscovered after a Neovim restart

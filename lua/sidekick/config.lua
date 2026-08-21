@@ -90,6 +90,11 @@ local defaults = {
       -- window: when run inside a terminal multiplexer, new sessions will be created in a new tab
       -- split: when run inside a terminal multiplexer, new sessions will be created in a new split
       -- NOTE: zellij only supports `terminal`
+      -- NOTE: for herdr, `terminal` runs the tool in a Neovim terminal and registers it
+      -- on Neovim's own pane. It is hidden and never cropped, but herdr can't detect it
+      -- natively -- Neovim gives its terminal child its own tty -- so sidekick reports the
+      -- agent's state itself and herdr's session resume does not cover it.
+      -- Use `split` or `window` for herdr's native detection, status and resume.
       create = "terminal", ---@type "terminal"|"window"|"split"
       split = {
         vertical = true, -- vertical or horizontal split

@@ -300,6 +300,7 @@ local defaults = {
         hide_ctrl_z   = { "<c-z>", "blur"      , mode = "nt", desc = "go back to the previous window without hiding the terminal" },
         prompt        = { "<c-p>", "prompt"    , mode = "t" , desc = "insert prompt or context" },
         stopinsert    = { "<c-q>", "stopinsert", mode = "t" , desc = "enter normal mode" },
+        normal_cr     = { "<cr>" , "insert_cr" , mode = "n" , desc = "send <cr> to the terminal and enter normal mode" },
         -- Navigate windows in terminal mode. Only active when:
         -- * layout is not "float"
         -- * there is another window in the direction
@@ -315,19 +316,27 @@ local defaults = {
       nav = nil,
     },
     ---@class sidekick.cli.Mux
-    ---@field backend? "tmux"|"zellij" Multiplexer backend to persist CLI sessions
+    ---@field backend? "tmux"|"zellij"|"herdr" Multiplexer backend to persist CLI sessions
     mux = {
-      backend = vim.env.ZELLIJ and "zellij" or "tmux", -- default to tmux unless zellij is detected
+      backend = vim.env.HERDR_ENV and "herdr" or vim.env.ZELLIJ and "zellij" or "tmux",
       enabled = false,
       -- terminal: new sessions will be created for each CLI tool and shown in a Neovim terminal
       -- window: when run inside a terminal multiplexer, new sessions will be created in a new tab
       -- split: when run inside a terminal multiplexer, new sessions will be created in a new split
       -- NOTE: zellij only supports `terminal`
+      -- NOTE: for herdr, `terminal` runs the tool in a Neovim terminal and registers it
+      -- on Neovim's own pane. It is hidden and never cropped, but herdr can't detect it
+      -- natively -- Neovim gives its terminal child its own tty -- so sidekick reports the
+      -- agent's state itself and herdr's session resume does not cover it.
+      -- Use `split` or `window` for herdr's native detection, status and resume.
       create = "terminal", ---@type "terminal"|"window"|"split"
       split = {
         vertical = true, -- vertical or horizontal split
         size = 0.5, -- size of the split (0-1 for percentage)
       },
+      -- max lines to capture when dumping a multiplexer pane for scrollback support
+      -- more lines means slower loading of the scrollback
+      dump = 2000,
     },
     --- Actual cli tool config is loaded from the runtime path `sk/cli/{tool}.lua` and merged with the config below.
     --- For default configs, see https://github.com/folke/sidekick.nvim/tree/main/sk/cli
@@ -923,18 +932,29 @@ Use them together for the complete experience!
 
 ### Terminal sessions not persisting?
 
-Make sure you have tmux or zellij installed and enable the multiplexer:
+Make sure you have tmux, zellij or herdr installed and enable the multiplexer:
 
 ```lua
 opts = {
   cli = {
     mux = {
       enabled = true,
-      backend = "tmux", -- or "zellij"
+      backend = "tmux", -- or "zellij" or "herdr"
     },
   },
 }
 ```
+
+With `herdr`, pick the mode based on what you want from herdr itself:
+
+- `create = "split"` / `"window"` put the tool in a real herdr pane, so herdr detects it,
+  drives its status, and its own session resume covers it. The session is external: you
+  interact with it in herdr, and sidekick sends context to it.
+- `create = "terminal"` runs the tool in a Neovim terminal and registers it on Neovim's
+  own pane, so it shows up in herdr's sidebar pointing at the pane that really hosts it.
+  Nothing extra is created and nothing is cropped, but herdr cannot see behind Neovim's
+  PTY: sidekick reports the agent's state itself, and herdr's session resume does not
+  cover the session. Only one such session per Neovim instance can be registered.
 
 ### Do I need a GitHub Copilot subscription?
 

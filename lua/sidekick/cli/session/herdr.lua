@@ -3,8 +3,26 @@ local Util = require("sidekick.util")
 
 ---@class sidekick.cli.muxer.Herdr: sidekick.cli.Session
 ---@field herdr_pane_id string
+---@field herdr_embedded? boolean the tool runs in a Neovim terminal, not in a herdr pane
+---@field herdr_token? string sidekick's ownership token, when the pane carries one
 local M = {}
 M.__index = M
+
+--- herdr corroboration-gates its own `herdr:*` integration sources and rejects them for a
+--- pane whose foreground process isn't the agent. Any other source is trusted as an
+--- external lifecycle authority, so sidekick reports under a source of its own.
+local SOURCE = "sidekick"
+
+--- Pane metadata token marking a pane as sidekick's. It holds the session's `sid`, so a
+--- restarted Neovim can tell its own panes from ones the user started by hand.
+--- Unlike the sidebar label, it carries no TTL: it has to outlive Neovim to be useful.
+local TOKEN = "sidekick"
+
+--- The sidebar label is refreshed on a timer, so a Neovim that dies without tearing down
+--- stops labelling its pane. `pane report-agent` takes no TTL, so the registration itself
+--- is reaped by `M.sessions()` instead.
+local LABEL_TTL = 30000 -- ms
+local LABEL_REFRESH = 10000 -- ms
 
 -- Maps tool names to the agent kinds herdr detects natively.
 -- Only used to resolve agents reported by `herdr agent list` back to a tool.
@@ -20,6 +38,29 @@ local tool_to_kind = {
   opencode = "opencode",
   qwen     = "qwen",
 }
+
+--- herdr's agent status mapped onto sidekick's. herdr's `done` has no sidekick
+--- equivalent: an agent that finished its turn is an idle agent.
+-- stylua: ignore
+local status_map = {
+  idle    = "idle",
+  working = "working",
+  blocked = "blocked",
+  done    = "idle",
+  unknown = "unknown",
+}
+
+--- The one embedded session registered on this Neovim's pane, if any.
+--- Neovim has exactly one herdr pane, so it can host exactly one registration.
+---@type { sid:string, pane_id:string, label:string, timer:uv.uv_timer_t }?
+M._embedded = nil
+
+--- Live `pane.agent_status_changed` subscriptions, by pane id.
+--- Keyed at module level because `M.sessions()` recreates session objects on every poll.
+M._watch = {} ---@type table<string, uv.uv_pipe_t>
+
+--- Last status herdr pushed for a pane.
+M._status = {} ---@type table<string, sidekick.cli.session.Status>
 
 ---@param tool_name string
 ---@return string?
@@ -59,9 +100,12 @@ function M:init()
   if self.started then
     self.external = self.sid ~= self.mux_session
   else
-    self.external = vim.env.HERDR_ENV and Config.cli.mux.create ~= "terminal"
+    -- `terminal` runs the tool in a Neovim terminal and registers it on Neovim's own
+    -- pane, so it is the only mode that is not external.
+    self.external = vim.env.HERDR_ENV ~= nil and Config.cli.mux.create ~= "terminal"
     self.mux_session = self.sid
   end
+  self.status = self.status or (self.herdr_pane_id and M._status[self.herdr_pane_id]) or "unknown"
   self.priority = self.external and 10 or 50
 end
 
@@ -99,6 +143,43 @@ end
 
 ---@return sidekick.cli.terminal.Cmd?
 function M:start()
+  if self.external then
+    return self:start_native()
+  end
+  return self:start_embedded()
+end
+
+--- `create = "terminal"`: the tool runs in a Neovim terminal, exactly like the `terminal`
+--- backend runs it. No herdr pane is created, so there is no attach race and no pane gets
+--- resized. herdr cannot detect the tool itself -- Neovim gives its terminal child a
+--- separate controlling tty, and herdr only admits agents from the pane's foreground
+--- process group -- so sidekick registers the session on Neovim's own pane and owns its
+--- lifecycle from there.
+---@return sidekick.cli.terminal.Cmd?
+function M:start_embedded()
+  self.herdr_embedded = true
+  self.herdr_pane_id = vim.env.HERDR_PANE_ID
+  self.status = "idle"
+  self.started = true
+  -- register once the terminal job has been spawned. If it fails to start, the terminal
+  -- closes itself and `detach()` takes the registration back down.
+  vim.schedule(function()
+    self:register()
+  end)
+  return {
+    cmd = self.tool.cmd,
+    -- every herdr integration hook opens with `[ -n "${HERDR_PANE_ID:-}" ] || exit 0`,
+    -- so clearing it is what keeps the tool from claiming Neovim's pane. A claim locks
+    -- the pane against `report-agent` from every source and cannot be undone.
+    -- `HERDR_ENV` and `HERDR_SOCKET_PATH` are left alone.
+    env = { HERDR_PANE_ID = false },
+  }
+end
+
+--- `create = "split"` / `"window"`: a real herdr pane, detected and driven by herdr
+--- itself. Sidekick only stamps the pane as its own and listens for status.
+---@return sidekick.cli.terminal.Cmd?
+function M:start_native()
   local split_cmd = { "herdr", "pane", "split" }
   -- split the pane running Neovim, not whatever pane happens to be focused
   if vim.env.HERDR_PANE_ID then
@@ -124,8 +205,7 @@ function M:start()
   end
   self.herdr_pane_id = pane_id
 
-  -- a pane next to Neovim is only wanted for `split`. `terminal` shows the tool in a
-  -- Neovim terminal, so the pane is moved out of sight, and `window` gets its own tab
+  -- a pane next to Neovim is only wanted for `split`. `window` gets its own tab.
   if Config.cli.mux.create ~= "split" then
     self:move_to_tab()
   end
@@ -138,54 +218,246 @@ function M:start()
   self.id = "herdr:" .. self.herdr_pane_id
   self.started = true
 
-  if not self.external then
-    return { cmd = { "herdr", "agent", "attach", self.herdr_pane_id } }
-  end
+  -- herdr keeps lifecycle authority for a pane it can see into, so sidekick reports no
+  -- agent state here. The token is only an ownership marker for rediscovery.
+  self:report_metadata({ "--token", ("%s=%s"):format(TOKEN, self.sid) })
+  M.watch(self.herdr_pane_id)
 
   Util.info(
     ("Started **%s** in a herdr %s"):format(self.tool.name, Config.cli.mux.create == "split" and "split" or "tab")
   )
 end
 
---- Move the pane to a tab of its own, keeping the focus where it is
+--- Move the pane to a tab of its own, without stealing focus.
+--- Pane ids are stable across a move inside the same workspace, so the stored id stays valid.
 function M:move_to_tab()
-  if not Util.exec({ "herdr", "pane", "move", self.herdr_pane_id, "--new-tab" }, { notify = true }) then
+  Util.exec({ "herdr", "pane", "move", self.herdr_pane_id, "--new-tab", "--no-focus" }, { notify = true })
+end
+
+--- Register an embedded session as a herdr agent on the pane running Neovim.
+function M:register()
+  if not self.herdr_pane_id then
+    Util.debug("herdr: `HERDR_PANE_ID` is not set, not registering **" .. self.tool.name .. "**")
     return
   end
-  -- `pane move --new-tab` focuses the tab it created
-  if vim.env.HERDR_TAB_ID then
-    Util.exec({ "herdr", "tab", "focus", vim.env.HERDR_TAB_ID }, { notify = false })
+  if M._embedded and M._embedded.sid ~= self.sid then
+    Util.warn({
+      ("Not registering **%s** with herdr."):format(self.tool.name),
+      ("`%s` already holds this Neovim's pane, and a pane hosts a single agent."):format(M._embedded.sid),
+      "The session runs as usual, it just won't show up in herdr.",
+    })
+    return
+  end
+
+  M._embedded = M._embedded
+    or {
+      sid = self.sid,
+      pane_id = self.herdr_pane_id,
+      label = self.tool.name,
+      timer = assert(vim.uv.new_timer()),
+    }
+
+  self:report_agent(self.status)
+  self:report_metadata({ "--token", ("%s=%s"):format(TOKEN, self.sid) })
+  self:refresh_label()
+  M._embedded.timer:start(
+    LABEL_REFRESH,
+    LABEL_REFRESH,
+    vim.schedule_wrap(function()
+      self:refresh_label()
+    end)
+  )
+end
+
+--- Report a lifecycle transition for an embedded session.
+--- herdr does not drive status for an agent it did not detect itself, so every
+--- transition sidekick knows about has to be pushed.
+---@param status sidekick.cli.session.Status
+function M:set_status(status)
+  if self.status == status then
+    return
+  end
+  self.status = status
+  if self.herdr_embedded and M._embedded and M._embedded.sid == self.sid then
+    self:report_agent(status)
   end
 end
 
+---@param status sidekick.cli.session.Status
+function M:report_agent(status)
+  -- stylua: ignore
+  Util.exec({
+    "herdr", "pane", "report-agent", self.herdr_pane_id,
+    "--source", SOURCE,
+    "--agent", self.tool.name,
+    "--state", status,
+  }, { notify = false })
+end
+
+---@param args string[]
+function M:report_metadata(args)
+  local cmd = { "herdr", "pane", "report-metadata", self.herdr_pane_id, "--source", SOURCE }
+  vim.list_extend(cmd, args)
+  Util.exec(cmd, { notify = false })
+end
+
+--- Label Neovim's pane in herdr's sidebar. The TTL is the crash backstop.
+function M:refresh_label()
+  -- stylua: ignore
+  self:report_metadata({
+    "--display-agent", self.tool.name,
+    "--title", ("%s (sidekick)"):format(self.tool.name),
+    "--ttl-ms", tostring(LABEL_TTL),
+  })
+end
+
+--- Subscribe to herdr's `pane.agent_status_changed` for a pane.
+--- Best effort: without a subscription the status simply stays where it was.
+---@param pane_id string
+function M.watch(pane_id)
+  local path = vim.env.HERDR_SOCKET_PATH
+  if not path or M._watch[pane_id] then
+    return
+  end
+  local pipe = vim.uv.new_pipe(false)
+  if not pipe then
+    return
+  end
+  M._watch[pane_id] = pipe
+
+  pipe:connect(path, function(err)
+    if err then
+      vim.schedule(function()
+        Util.debug("herdr: no status events for `" .. pane_id .. "`: " .. err)
+      end)
+      return M.unwatch(pane_id)
+    end
+    local req = vim.json.encode({
+      id = "sidekick:watch:" .. pane_id,
+      method = "events.subscribe",
+      params = { subscriptions = { { type = "pane.agent_status_changed", pane_id = pane_id } } },
+    })
+    pipe:write(req .. "\n")
+
+    local buf = ""
+    pipe:read_start(function(read_err, data)
+      if read_err or not data then
+        return M.unwatch(pane_id)
+      end
+      buf = buf .. data
+      while true do
+        local line, rest = buf:match("^([^\n]*)\n(.*)$")
+        if not line then
+          break
+        end
+        buf = rest
+        local ok, msg = pcall(vim.json.decode, line)
+        if ok and type(msg) == "table" and msg.event == "pane.agent_status_changed" then
+          local d = type(msg.data) == "table" and msg.data or {}
+          M._status[tostring(d.pane_id or pane_id)] = status_map[d.agent_status] or "unknown"
+        end
+      end
+    end)
+  end)
+end
+
+---@param pane_id string
+function M.unwatch(pane_id)
+  local pipe = M._watch[pane_id]
+  M._watch[pane_id] = nil
+  if pipe then
+    pcall(function()
+      pipe:read_stop()
+    end)
+    if not pipe:is_closing() then
+      pipe:close()
+    end
+  end
+end
+
+--- Nothing is ever embedded into a Neovim terminal here, so no `Cmd` is returned.
+--- An embedded session's tool ran in a terminal that is now gone. A native session lives
+--- in a herdr pane and the user attaches to it in herdr itself: `herdr agent attach`
+--- would mirror the pane into a second client and permanently resize the source pane to
+--- that client, which is what made these sessions render cropped. Sidekick stays external
+--- and drives the session over the pane API instead.
+---@return sidekick.cli.terminal.Cmd?
+function M:attach()
+  if not self.herdr_embedded and self.herdr_pane_id then
+    M.watch(self.herdr_pane_id) -- keep status flowing for a rediscovered session
+  end
+end
+
+--- Give the pane back to herdr: drop the registration, the sidebar label and the token.
+function M:detach()
+  if self.herdr_pane_id then
+    M.unwatch(self.herdr_pane_id)
+  end
+  if not (self.herdr_embedded and M._embedded and M._embedded.sid == self.sid) then
+    return
+  end
+  local timer = M._embedded.timer
+  if not timer:is_closing() then
+    timer:close()
+  end
+  M._embedded = nil
+  -- stylua: ignore
+  Util.exec({
+    "herdr", "pane", "release-agent", self.herdr_pane_id,
+    "--source", SOURCE, "--agent", self.tool.name,
+  }, { notify = false })
+  self:report_metadata({ "--clear-display-agent", "--clear-title", "--clear-token", TOKEN })
+end
+
+--- Drop a registration left behind by a Neovim that died without tearing down.
+--- `pane report-agent` takes no TTL, so nothing else reaps it.
+---@param pane_id string
+---@param label? string
+function M.reap(pane_id, label)
+  Util.debug("herdr: releasing a stale sidekick agent on `" .. pane_id .. "`")
+  if label then
+    -- stylua: ignore
+    Util.exec({
+      "herdr", "pane", "release-agent", pane_id,
+      "--source", SOURCE, "--agent", label,
+    }, { notify = false })
+  end
+  -- stylua: ignore
+  Util.exec({
+    "herdr", "pane", "report-metadata", pane_id, "--source", SOURCE,
+    "--clear-display-agent", "--clear-title", "--clear-token", TOKEN,
+  }, { notify = false })
+end
+
 function M:send(text)
+  if self.herdr_embedded then
+    return -- the tool runs in a Neovim terminal; sending here would type into Neovim
+  end
   Util.exec({ "herdr", "pane", "send-text", self.herdr_pane_id, text })
 end
 
 function M:submit()
+  if self.herdr_embedded then
+    return
+  end
   Util.exec({ "herdr", "pane", "send-keys", self.herdr_pane_id, "Enter" })
 end
-
----@return sidekick.cli.terminal.Cmd?
-function M:attach()
-  if self.sid == self.mux_session then
-    return { cmd = { "herdr", "agent", "attach", self.herdr_pane_id } }
-  end
-end
-
-function M:detach() end
 
 function M:is_running()
   if not self.herdr_pane_id then
     return false
+  end
+  if self.herdr_embedded then
+    -- the tool lives in a Neovim terminal, so the pane says nothing about it
+    return M._embedded ~= nil and M._embedded.sid == self.sid
   end
   -- the tool replaced the pane's shell, so the pane lives exactly as long as the tool
   return Util.exec({ "herdr", "pane", "get", self.herdr_pane_id }, { notify = false }) ~= nil
 end
 
 function M:dump()
-  if not self.herdr_pane_id then
-    return
+  if not self.herdr_pane_id or self.herdr_embedded then
+    return -- an embedded tool's output is in the Neovim terminal, not in the pane
   end
   -- stylua: ignore
   local _, raw = Util.exec({
@@ -195,6 +467,39 @@ function M:dump()
     "--ansi",
   }, { notify = false })
   return raw
+end
+
+--- Check that herdr still admits a `report-agent` from sidekick's own source.
+--- Gate A's treatment of unregistered sources is not part of herdr's documented
+--- contract, so `:checkhealth` probes it instead of letting embedded mode fail silently.
+---@return boolean ok, string msg
+function M.probe()
+  local pane_id = vim.env.HERDR_PANE_ID
+  if not pane_id then
+    return false, "`HERDR_PANE_ID` is not set, so embedded sessions cannot be registered"
+  end
+  if M._embedded then
+    return true, ("`%s` is registered on this Neovim's pane"):format(M._embedded.sid)
+  end
+  local label = "sidekick-health"
+  -- stylua: ignore
+  local reported = Util.exec({
+    "herdr", "pane", "report-agent", pane_id,
+    "--source", SOURCE, "--agent", label, "--state", "unknown",
+  }, { notify = false })
+  if not reported then
+    return false, 'herdr rejected `pane report-agent` for this pane, so `mux.create = "terminal"` cannot register'
+  end
+  local _, raw = Util.exec({ "herdr", "pane", "get", pane_id }, { notify = false })
+  -- stylua: ignore
+  Util.exec({
+    "herdr", "pane", "release-agent", pane_id,
+    "--source", SOURCE, "--agent", label,
+  }, { notify = false })
+  if not (raw and raw:find(label, 1, true)) then
+    return false, "herdr accepted `pane report-agent` but did not read it back on this pane"
+  end
+  return true, "herdr accepts sidekick's agent reports on this pane"
 end
 
 function M.sessions()
@@ -215,19 +520,41 @@ function M.sessions()
     end
   end
 
+  local nvim_pane = vim.env.HERDR_PANE_ID
   local ret = {} ---@type sidekick.cli.session.State[]
   for _, agent in ipairs(agents) do
-    local tool_name = kind_to_tool[agent.agent]
-    if tool_name then
-      local pane_id = tostring(agent.pane_id)
-      ret[#ret + 1] = {
-        id = "herdr:" .. pane_id,
-        cwd = agent.cwd or "",
-        tool = tool_name,
-        herdr_pane_id = pane_id,
-        mux_session = tool_name,
-        pids = {},
-      }
+    local pane_id = tostring(agent.pane_id)
+    local token = type(agent.tokens) == "table" and agent.tokens[TOKEN] or nil
+    local status = status_map[agent.agent_status] or "unknown"
+    M._status[pane_id] = status
+
+    if pane_id == nvim_pane then
+      -- Neovim's own pane. Nothing native can run here, so this is either sidekick's
+      -- embedded registration -- already represented by its terminal session -- or a
+      -- leftover from a Neovim that died without tearing down.
+      if token and not (M._embedded and M._embedded.sid == token) then
+        M.reap(pane_id, agent.agent)
+      end
+    else
+      local tool_name = kind_to_tool[agent.agent]
+      if tool_name then
+        ret[#ret + 1] = {
+          id = "herdr:" .. pane_id,
+          cwd = agent.cwd or "",
+          tool = tool_name,
+          herdr_pane_id = pane_id,
+          -- A session in a herdr pane is always external: it is the user's to drive in
+          -- herdr, and sidekick talks to it over the pane API. `mux_session` therefore
+          -- names the pane rather than matching `sid` -- `init()` reads
+          -- `sid ~= mux_session` as "external", and a per-pane name is also unique,
+          -- which the bare tool name was not.
+          mux_session = "herdr:" .. pane_id,
+          -- Ownership is informational: sidekick started this pane, the user did not.
+          herdr_token = token,
+          status = status,
+          pids = {},
+        }
+      end
     end
   end
 

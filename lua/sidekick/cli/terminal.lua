@@ -117,6 +117,16 @@ end
 
 function M:attach() end
 
+--- The tool runs in this terminal, not in a multiplexer, so a mux session that owns its
+--- agent's lifecycle can only learn about these transitions from here.
+---@param status sidekick.cli.session.Status
+function M:set_status(status)
+  self.status = status
+  if self.parent then
+    self.parent:set_status(status)
+  end
+end
+
 function M:is_running()
   return self.job and vim.fn.jobwait({ self.job }, 0)[1] == -1
 end
@@ -190,6 +200,7 @@ function M:start()
     group = self.group,
     buffer = self.buf,
     callback = function()
+      self:set_status("unknown") -- the job is gone, so nothing is known about the tool
       local ms = (vim.uv.hrtime() - self.atime) / 1e6
       if ms < TERM_CLOSE_DELAY then
         -- don't close if the terminal closed too quickly
@@ -318,6 +329,7 @@ function M:start()
   end
   self.pids = { vim.fn.jobpid(self.job) }
   self.started = true
+  self:set_status("idle")
 
   if Config.cli.watch then
     require("sidekick.cli.watch").enable()
@@ -501,6 +513,7 @@ function M:send(input)
     return
   end
   table.insert(self.send_queue, input)
+  self:set_status("working")
 end
 
 function M:submit()

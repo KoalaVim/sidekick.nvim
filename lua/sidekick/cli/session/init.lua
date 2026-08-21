@@ -7,6 +7,8 @@ M.backends = {} ---@type table<string,sidekick.cli.Session>
 M.did_setup = false
 M._attached = {} ---@type table<string,sidekick.cli.Session>
 
+---@alias sidekick.cli.session.Status "idle"|"working"|"blocked"|"unknown"
+
 ---@class sidekick.cli.session.State
 ---@field id string unique id of the running tool (typically pid of tool)
 ---@field cwd string
@@ -18,6 +20,7 @@ M._attached = {} ---@type table<string,sidekick.cli.Session>
 ---@field parent? sidekick.cli.Session
 ---@field mux_session? string
 ---@field mux_backend? string
+---@field status? sidekick.cli.session.Status what the tool is doing, when anything knows
 
 ---@alias sidekick.cli.session.Opts sidekick.cli.session.State|{cwd?:string,id?:string}
 
@@ -29,6 +32,15 @@ M._attached = {} ---@type table<string,sidekick.cli.Session>
 local B = {}
 B.__index = B
 B.priority = 0
+--- Nothing is known about a session's agent until something reports it.
+B.status = "unknown"
+
+--- Record what the tool is doing. Backends that own an agent's lifecycle override this
+--- to also report the transition to their multiplexer.
+---@param status sidekick.cli.session.Status
+function B:set_status(status)
+  self.status = status
+end
 
 --- Send text to the session
 ---@param text string
@@ -168,6 +180,11 @@ function M.detach(session)
   if M._attached[session.id] then
     M._attached[session.id] = nil
     session:detach()
+    -- a terminal hosting a mux session is the only handle sidekick has on that session,
+    -- so the mux session goes down with it
+    if session.parent then
+      session.parent:detach()
+    end
     vim.schedule(function()
       Util.emit("SidekickCliDetach", { id = session.id })
     end)
