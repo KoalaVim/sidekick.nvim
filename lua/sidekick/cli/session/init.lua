@@ -39,7 +39,13 @@ B.status = "unknown"
 --- to also report the transition to their multiplexer.
 ---@param status sidekick.cli.session.Status
 function B:set_status(status)
+  if self.status == status then
+    return
+  end
   self.status = status
+  vim.schedule(function()
+    require("sidekick.util").emit("SidekickCliStatus", { id = self.id })
+  end)
 end
 
 --- Send text to the session

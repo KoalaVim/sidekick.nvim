@@ -11,6 +11,7 @@ local M = {}
 ---@field id string
 ---@field tool string
 ---@field cwd string
+---@field status sidekick.cli.session.Status
 
 local status = {} ---@type table<integer, sidekick.lsp.Status>
 local cli_sessions = {} ---@type table<string, sidekick.cli.Status>
@@ -31,6 +32,7 @@ local function update_cli_status()
       id = session.id,
       tool = session.tool.name,
       cwd = session.cwd,
+      status = session.status or "unknown",
     }
   end
 end
@@ -90,7 +92,7 @@ function M.setup()
 
   vim.api.nvim_create_autocmd("User", {
     group = Config.augroup,
-    pattern = { "SidekickCliAttach", "SidekickCliDetach" },
+    pattern = { "SidekickCliAttach", "SidekickCliDetach", "SidekickCliStatus" },
     callback = update_cli_status,
   })
 
