@@ -31,6 +31,13 @@ function M.get(picker)
   Util.error("No valid picker found")
 end
 
+--- Merge the configured `cli.picker_opts[source]` with `opts`
+---@param source string
+---@param opts? table
+function M.opts(source, opts)
+  return vim.tbl_deep_extend("force", {}, Config.cli.picker_opts[source] or {}, opts or {})
+end
+
 ---@param opts? sidekick.context.loc.Opts|sidekick.cli.Send
 function M._send_cb(opts)
   opts = opts or {}
@@ -58,7 +65,7 @@ end
 ---@param popts? table
 function M.open(source, opts, popts)
   local picker = M.get()
-  return picker and picker.open(source, M._send_cb(opts), popts)
+  return picker and picker.open(source, M._send_cb(opts), M.opts(source, popts))
 end
 
 return M
