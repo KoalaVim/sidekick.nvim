@@ -89,10 +89,8 @@ function M.select(opts)
         return ret
       end,
       preview = "preview",
-      layout = {
-        preset = "vscode",
-        hidden = {},
-      },
+      layout = type(Config.cli.prompt_layout) == "function" and Config.cli.prompt_layout()
+        or Config.cli.prompt_layout,
       win = {
         input = {
           keys = {

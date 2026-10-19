@@ -145,6 +145,13 @@ local defaults = {
     -- preferred picker for selecting files
     ---@alias sidekick.picker "snacks"|"telescope"|"fzf-lua"
     picker = "snacks", ---@type sidekick.picker
+    --- Snacks layout for the prompt picker (`<c-p>`). Use a function to compute
+    --- it when the picker opens (e.g. to anchor it at the cursor).
+    ---@type snacks.picker.layout.Config|fun():snacks.picker.layout.Config
+    prompt_layout = {
+      preset = "vscode",
+      hidden = {},
+    },
   },
   copilot = {
     -- track copilot's status with `didChangeStatus`
