@@ -143,7 +143,7 @@ local defaults = {
       class           = "{class}",
     },
     -- preferred picker for selecting files
-    ---@alias sidekick.picker "snacks"|"telescope"|"fzf-lua"
+    ---@alias sidekick.picker "snacks"|"telescope"|"fzf-lua"|"fff"
     picker = "snacks", ---@type sidekick.picker
     --- Extra options passed to the picker, per source (e.g. `files`, `buffers`).
     --- Merged with the options sidekick passes itself.
