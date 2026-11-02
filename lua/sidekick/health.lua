@@ -66,13 +66,31 @@ function M.check()
     ok("Terminal multiplexer integration is disabled")
   end
 
-  for _, mux in ipairs({ "tmux", "zellij" }) do
+  for _, mux in ipairs({ "tmux", "zellij", "herdr" }) do
     if vim.fn.executable(mux) == 1 then
       ok("`" .. mux .. "` is installed")
     elseif mux == Config.cli.mux.backend then
       error("Multiplexer backend `" .. mux .. "` is not installed")
     else
       ok("`" .. mux .. "` is not installed, but it's not the configured backend")
+    end
+  end
+
+  if
+    Config.cli.mux.enabled
+    and Config.cli.mux.backend == "herdr"
+    and vim.fn.executable("herdr") == 1
+    and vim.env.HERDR_ENV
+  then
+    -- An embedded herdr session is registered with `pane report-agent` from a source
+    -- herdr does not know. That herdr accepts such a source is not part of its documented
+    -- contract, so probe it: if a future herdr gates every source, `mux.create =
+    -- "terminal"` degrades to a plain Neovim terminal and this is the only warning.
+    local herdr_ok, msg = require("sidekick.cli.session.herdr").probe()
+    if herdr_ok then
+      ok(msg)
+    else
+      warn(msg .. '\n`cli.mux.create = "terminal"` still works, but herdr won\'t show the session')
     end
   end
 

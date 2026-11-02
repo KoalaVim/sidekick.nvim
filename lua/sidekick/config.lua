@@ -82,14 +82,22 @@ local defaults = {
       nav = nil,
     },
     ---@class sidekick.cli.Mux
-    ---@field backend? "tmux"|"zellij" Multiplexer backend to persist CLI sessions
+    ---@field backend? "tmux"|"zellij"|"herdr" Multiplexer backend to persist CLI sessions
     mux = {
-      backend = vim.env.ZELLIJ and "zellij" or "tmux", -- default to tmux unless zellij is detected
+      -- default to tmux unless zellij is detected, or herdr is the only multiplexer around
+      backend = vim.env.ZELLIJ and "zellij"
+        or (vim.env.HERDR_ENV and not vim.env.TMUX) and "herdr"
+        or "tmux",
       enabled = false,
       -- terminal: new sessions will be created for each CLI tool and shown in a Neovim terminal
       -- window: when run inside a terminal multiplexer, new sessions will be created in a new tab
       -- split: when run inside a terminal multiplexer, new sessions will be created in a new split
       -- NOTE: zellij only supports `terminal`
+      -- NOTE: for herdr, `terminal` runs the tool in a Neovim terminal and registers it
+      -- on Neovim's own pane. It is hidden and never cropped, but herdr can't detect it
+      -- natively -- Neovim gives its terminal child its own tty -- so sidekick reports the
+      -- agent's state itself and herdr's session resume does not cover it.
+      -- Use `split` or `window` for herdr's native detection, status and resume.
       create = "terminal", ---@type "terminal"|"window"|"split"
       split = {
         vertical = true, -- vertical or horizontal split
@@ -233,7 +241,7 @@ function M.setup(opts)
     require("sidekick.status").setup()
 
     M.validate("cli.win.layout", { "float", "left", "bottom", "top", "right" })
-    M.validate("cli.mux.backend", { "tmux", "zellij" })
+    M.validate("cli.mux.backend", { "tmux", "zellij", "herdr" })
     M.validate("cli.mux.create", { "terminal", "window", "split" })
     M.validate("nes.diff.show", { "always", "cursor" })
   end)

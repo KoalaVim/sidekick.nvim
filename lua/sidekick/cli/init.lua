@@ -101,6 +101,10 @@ function M.toggle(opts)
   opts = filter_opts(opts)
   State.with(function(state, attached)
     if not state.terminal then
+      -- a mux pane cannot be hidden, so there is nothing to toggle: bring it to the front
+      if opts.focus ~= false then
+        state.session:focus()
+      end
       return
     end
     if not attached then
@@ -122,7 +126,8 @@ function M.focus(opts)
   opts = filter_opts(opts)
   State.with(function(state)
     if not state.terminal then
-      return
+      -- there is no blur for a mux pane, so focusing is all sidekick can do here
+      return state.session:focus()
     end
     if state.terminal:is_focused() then
       state.terminal:blur()

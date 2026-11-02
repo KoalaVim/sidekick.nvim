@@ -28,6 +28,15 @@ function M.select(opts)
     on_select(tools[1])
     return
   elseif opts.auto and opts.filter and opts.filter.name then
+    -- A herdr pane is a live pane next to Neovim, so starting fresh would leave the user
+    -- with two. Reuse the one already running in this cwd instead.
+    local cwd = require("sidekick.cli.session").cwd()
+    for _, t in ipairs(tools) do
+      if t.session and t.session.backend == "herdr" and t.session.cwd == cwd then
+        on_select(t)
+        return
+      end
+    end
     -- Prefer the tool entry without a session (starts fresh)
     local pick = tools[1]
     for _, t in ipairs(tools) do
