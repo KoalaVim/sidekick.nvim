@@ -196,7 +196,9 @@ function M:run_cmd()
   -- `pane run` joins its arguments into a command line for the pane's shell,
   -- so anything that ends up there needs to be quoted.
   -- `exec` replaces the shell, so the pane closes as soon as the tool exits.
-  local ret = { "herdr", "pane", "run", self.herdr_pane_id, "exec", "env" }
+  -- The leading space keeps the line out of shell history (zsh `histignorespace`,
+  -- bash `HISTCONTROL=ignorespace`, fish).
+  local ret = { "herdr", "pane", "run", self.herdr_pane_id, " exec", "env" }
   for key, value in pairs(env) do
     if value == false then
       vim.list_extend(ret, { "-u", key })
