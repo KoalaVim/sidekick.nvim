@@ -300,4 +300,12 @@ function M.fix_pos(buf, pos)
   return pos
 end
 
+--- `$EDITOR` proxy shipped on the runtimepath (by KoalaVim), if any.
+--- The `-gedit` name makes Claude Code treat it as a GUI editor and keep its screen up.
+---@return string?
+function M.editor_proxy()
+  return vim.api.nvim_get_runtime_file("bin/sidekick-editor-proxy-gedit", false)[1]
+    or vim.api.nvim_get_runtime_file("bin/sidekick-editor-proxy", false)[1]
+end
+
 return M

@@ -186,7 +186,7 @@ end
 function M:run_cmd()
   ---@type table<string, string|false>
   local env = { NVIM = vim.v.servername }
-  local editor_proxy = vim.api.nvim_get_runtime_file("bin/sidekick-editor-proxy", false)[1]
+  local editor_proxy = Util.editor_proxy()
   if editor_proxy then
     env.EDITOR = editor_proxy
     env.VISUAL = editor_proxy
