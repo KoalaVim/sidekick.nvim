@@ -138,7 +138,7 @@ function M.get(filter)
 end
 
 --- Executes a callback with one or more attached sessions.
----@param cb fun(state: sidekick.cli.State, attached?: boolean):any?
+---@param cb fun(state: sidekick.cli.State, attached?: boolean, created?: boolean):any?
 ---@param opts? sidekick.cli.With
 function M.with(cb, opts)
   opts = opts or {}
@@ -149,8 +149,8 @@ function M.with(cb, opts)
     if not state then
       return
     end
-    local ret, attached = M.attach(state, { show = opts.show, focus = opts.focus })
-    cb(ret, attached)
+    local ret, attached, created = M.attach(state, { show = opts.show, focus = opts.focus })
+    cb(ret, attached, created)
   end)
 
   local filter_attached = Util.merge(opts.filter, { attached = true })
@@ -175,10 +175,11 @@ end
 
 ---@param state sidekick.cli.State
 ---@param opts? {show?:boolean, focus?:boolean}
----@return sidekick.cli.State state, boolean attached whether we just attached
+---@return sidekick.cli.State state, boolean attached whether we just attached, boolean created whether we started a new session
 function M.attach(state, opts)
   opts = opts or {}
   local attached = state.session == nil or not state.attached
+  local created = state.session == nil or not state.session.started
   local tool = state.tool
 
   -- if the session is already attached, the below is a no-op
@@ -205,7 +206,7 @@ function M.attach(state, opts)
       session:focus()
     end
   end
-  return state, attached
+  return state, attached, created
 end
 
 ---@param state sidekick.cli.State
