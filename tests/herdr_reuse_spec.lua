@@ -15,6 +15,15 @@ describe("herdr split reuse", function()
       return { claude = {} }
     end
     Util.exec = function(cmd)
+      if cmd[3] == "layout" then
+        return true,
+          vim.json.encode({
+            result = { layout = { panes = {
+              { pane_id = "editor" },
+              { pane_id = "same" },
+            } } },
+          })
+      end
       if cmd[2] == "agent" then
         return true,
           vim.json.encode({
@@ -105,11 +114,40 @@ describe("herdr split reuse", function()
   }) do
     it("zooms the explicit agent pane with " .. case.mode, function()
       local command
+      local stub = Util.exec
       Util.exec = function(cmd)
+        if cmd[3] ~= "zoom" then
+          return stub(cmd)
+        end
         command = cmd
       end
-      Herdr.zoom({ herdr_pane_id = "same" }, case.enabled)
+      assert.is_true(Herdr.zoom({ herdr_pane_id = "same", herdr_token = "owned" }, case.enabled))
       assert.are.same({ "herdr", "pane", "zoom", "same", case.mode }, command)
+    end)
+  end
+
+  for _, case in ipairs({
+    { name = "one pane", panes = { "editor" }, owned = true },
+    { name = "three panes", panes = { "editor", "same", "shell" }, owned = true },
+    { name = "an agent in another tab", panes = { "editor", "shell" }, owned = true },
+    { name = "a tab without Neovim", panes = { "same", "shell" }, owned = true },
+    { name = "an agent not created by Sidekick", panes = { "editor", "same" }, owned = false },
+    { name = "an unavailable layout", owned = true },
+  }) do
+    it("does not take over zoom for " .. case.name, function()
+      local zoomed = false
+      Util.exec = function(cmd)
+        if cmd[3] == "zoom" then
+          zoomed = true
+        elseif cmd[3] == "layout" and case.panes then
+          local panes = vim.tbl_map(function(id)
+            return { pane_id = id }
+          end, case.panes)
+          return true, vim.json.encode({ result = { layout = { panes = panes } } })
+        end
+      end
+      assert.is_false(Herdr.zoom({ herdr_pane_id = "same", herdr_token = case.owned and "owned" or nil }))
+      assert.is_false(zoomed)
     end)
   end
 

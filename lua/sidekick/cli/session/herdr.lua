@@ -318,6 +318,7 @@ function M:start_native()
 
   self.id = "herdr:" .. self.herdr_pane_id
   self.started = true
+  self.herdr_token = self.sid
 
   -- herdr keeps lifecycle authority for a pane it can see into, so sidekick reports no
   -- agent state here. The token is only an ownership marker for rediscovery.
@@ -554,12 +555,32 @@ end
 
 --- Maximize a native pane, restore its layout, or toggle when no state is given.
 ---@param enabled? boolean
+---@return boolean handled
 function M:zoom(enabled)
-  if self.herdr_embedded or not self.herdr_pane_id then
-    return
+  if self.herdr_embedded or not self.herdr_pane_id or not self.herdr_token or not vim.env.HERDR_PANE_ID then
+    return false
+  end
+  -- Only take over editor zoom for the simple Neovim + Sidekick layout. Query
+  -- Neovim's pane explicitly, since focus may already be on the agent.
+  local _, raw = Util.exec({ "herdr", "pane", "layout", "--pane", vim.env.HERDR_PANE_ID }, { notify = false })
+  local ok, data = pcall(vim.json.decode, raw or "")
+  local result = ok and type(data) == "table" and data.result
+  local layout = type(result) == "table" and result.layout
+  local panes = type(layout) == "table" and layout.panes
+  if type(panes) ~= "table" or #panes ~= 2 then
+    return false
+  end
+  local editor, agent = false, false
+  for _, pane in ipairs(panes) do
+    editor = editor or pane.pane_id == vim.env.HERDR_PANE_ID
+    agent = agent or pane.pane_id == self.herdr_pane_id
+  end
+  if not (editor and agent) or self.herdr_pane_id == vim.env.HERDR_PANE_ID then
+    return false
   end
   local mode = enabled == nil and "--toggle" or (enabled and "--on" or "--off")
   Util.exec({ "herdr", "pane", "zoom", self.herdr_pane_id, mode }, { notify = true })
+  return true
 end
 
 function M:send(text)
