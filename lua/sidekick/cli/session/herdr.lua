@@ -195,7 +195,7 @@ end
 ---@return string[]
 function M:run_cmd()
   ---@type table<string, string|false>
-  local env = { NVIM = vim.v.servername }
+  local env = { NVIM = vim.v.servername, SIDEKICK_NVIM = vim.v.progpath }
   local editor_proxy = Util.editor_proxy()
   if editor_proxy then
     env.EDITOR = editor_proxy

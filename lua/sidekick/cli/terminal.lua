@@ -296,14 +296,23 @@ function M:start()
       editor_env.VISUAL = editor_proxy
     end
     ---@type table<string, string|false>
-    local env = vim.tbl_extend("force", {}, vim.uv.os_environ(), editor_env, self.tool.config.env or {}, self.tool.env or {}, {
-      NVIM = vim.v.servername,
-      NVIM_LISTEN_ADDRESS = false,
-      NVIM_LOG_FILE = false,
-      VIM = false,
-      VIMRUNTIME = false,
-      TERM = "xterm-256color",
-    })
+    local env = vim.tbl_extend(
+      "force",
+      {},
+      vim.uv.os_environ(),
+      editor_env,
+      self.tool.config.env or {},
+      self.tool.env or {},
+      {
+        NVIM = vim.v.servername,
+        SIDEKICK_NVIM = vim.v.progpath,
+        NVIM_LISTEN_ADDRESS = false,
+        NVIM_LOG_FILE = false,
+        VIM = false,
+        VIMRUNTIME = false,
+        TERM = "xterm-256color",
+      }
+    )
     -- add support for clearing env vars
     for k, v in pairs(env) do
       if v == false then

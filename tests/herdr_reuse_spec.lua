@@ -74,6 +74,12 @@ describe("herdr split reuse", function()
     assert.are.equal(2, #Herdr.sessions())
   end)
 
+  it("passes the host Neovim executable to the editor proxy", function()
+    local cmd = Herdr.run_cmd({ herdr_pane_id = "same", tool = { cmd = { "claude" }, config = {} } })
+    local expected = vim.fn.shellescape("SIDEKICK_NVIM=" .. vim.v.progpath)
+    assert.is_true(vim.tbl_contains(cmd, expected))
+  end)
+
   for _, owned in ipairs({ true, false }) do
     it(
       owned and "reuses an owned pane despite a different cwd" or "creates a pane when none is sidekick-owned",
