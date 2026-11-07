@@ -222,6 +222,25 @@ function M:run_cmd()
   return ret
 end
 
+--- A pane survives its Neovim host. Publish the current endpoint separately from
+--- the agent's inherited environment so its editor proxy follows reattachments.
+function M:publish_editor_host()
+  if self.herdr_embedded or not self.herdr_pane_id then
+    return
+  end
+  local cache = vim.env.XDG_CACHE_HOME or (vim.env.HOME .. "/.cache")
+  local function key(value)
+    return (value:gsub("[^a-zA-Z0-9_.-]", "_"))
+  end
+  local dir = cache .. "/sidekick/editor-hosts/" .. key(vim.env.HERDR_SOCKET_PATH or "default")
+  vim.fn.mkdir(dir, "p", 448)
+  local path = dir .. "/" .. key(self.herdr_pane_id)
+  local tmp = path .. "." .. vim.fn.getpid()
+  vim.fn.writefile({ vim.v.servername, vim.v.progpath }, tmp)
+  vim.uv.fs_chmod(tmp, 384)
+  assert(vim.uv.fs_rename(tmp, path))
+end
+
 ---@return sidekick.cli.terminal.Cmd?
 function M:start()
   if self.external then
@@ -285,6 +304,7 @@ function M:start_native()
     return
   end
   self.herdr_pane_id = pane_id
+  self:publish_editor_host()
 
   -- a pane next to Neovim is only wanted for `split`. `window` gets its own tab.
   if Config.cli.mux.create ~= "split" then
@@ -465,6 +485,7 @@ end
 ---@return sidekick.cli.terminal.Cmd?
 function M:attach()
   if not self.herdr_embedded and self.herdr_pane_id then
+    self:publish_editor_host()
     M.watch(self.herdr_pane_id) -- keep status flowing for a rediscovered session
   end
 end

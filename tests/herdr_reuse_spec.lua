@@ -80,6 +80,24 @@ describe("herdr split reuse", function()
     assert.is_true(vim.tbl_contains(cmd, expected))
   end)
 
+  it("refreshes the editor host when attaching to a running pane", function()
+    local watch = Herdr.watch
+    local published, watched
+    Herdr.watch = function(pane)
+      watched = pane
+    end
+    local ok = pcall(Herdr.attach, {
+      herdr_pane_id = "same",
+      publish_editor_host = function()
+        published = true
+      end,
+    })
+    Herdr.watch = watch
+    assert.is_true(ok)
+    assert.is_true(published)
+    assert.are.equal("same", watched)
+  end)
+
   for _, owned in ipairs({ true, false }) do
     it(
       owned and "reuses an owned pane despite a different cwd" or "creates a pane when none is sidekick-owned",
