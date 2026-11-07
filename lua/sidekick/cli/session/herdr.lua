@@ -108,6 +108,16 @@ local function parse_agent_list(raw)
   return nil
 end
 
+---@param pane_id string
+---@return string?
+local function pane_tab(pane_id)
+  local _, raw = Util.exec({ "herdr", "pane", "get", pane_id }, { notify = false })
+  local ok, data = pcall(vim.json.decode, raw or "")
+  local result = ok and type(data) == "table" and data.result
+  local pane = type(result) == "table" and result.pane
+  return type(pane) == "table" and pane.tab_id or nil
+end
+
 --- Issue one request against herdr's socket API and wait briefly for its response.
 --- `M.watch` streams events and never needs a reply; this is the request/response half.
 --- The socket is the only route to methods the CLI does not expose, such as `pane.focus`.
@@ -546,6 +556,10 @@ function M:is_running()
     return M._embedded ~= nil and M._embedded.sid == self.sid
   end
   -- the tool replaced the pane's shell, so the pane lives exactly as long as the tool
+  if Config.cli.mux.create == "split" then
+    local tab = pane_tab(vim.env.HERDR_PANE_ID or "")
+    return tab ~= nil and pane_tab(self.herdr_pane_id) == tab
+  end
   return Util.exec({ "herdr", "pane", "get", self.herdr_pane_id }, { notify = false }) ~= nil
 end
 
@@ -597,6 +611,12 @@ function M.probe()
 end
 
 function M.sessions()
+  -- Resolve Neovim's pane rather than the focused pane: sends may have focused the
+  -- agent, and panes can move between tabs without their environment changing.
+  local tab_id
+  if Config.cli.mux.create == "split" then
+    tab_id = pane_tab(vim.env.HERDR_PANE_ID or "")
+  end
   local _, raw = Util.exec({ "herdr", "agent", "list" }, { notify = false })
   if not raw then
     return {}
@@ -629,7 +649,7 @@ function M.sessions()
       if token and not (M._embedded and M._embedded.sid == token) then
         M.reap(pane_id, agent.agent)
       end
-    else
+    elseif Config.cli.mux.create ~= "split" or (tab_id and agent.tab_id == tab_id) then
       local tool_name = kind_to_tool[agent.agent]
       if tool_name then
         ret[#ret + 1] = {
@@ -637,6 +657,7 @@ function M.sessions()
           cwd = agent.cwd or "",
           tool = tool_name,
           herdr_pane_id = pane_id,
+          herdr_tab_id = agent.tab_id,
           -- A session in a herdr pane is always external: it is the user's to drive in
           -- herdr, and sidekick talks to it over the pane API. `mux_session` therefore
           -- names the pane rather than matching `sid` -- `init()` reads

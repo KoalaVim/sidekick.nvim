@@ -28,11 +28,18 @@ function M.select(opts)
     on_select(tools[1])
     return
   elseif opts.auto and opts.filter and opts.filter.name then
-    -- A herdr pane is a live pane next to Neovim, so starting fresh would leave the user
-    -- with two. Reuse the one already running in this cwd instead.
+    -- Split sessions are scoped to Neovim's herdr tab by the backend. Reuse a
+    -- sidekick-owned pane there even if the agent has changed working directory.
     local cwd = require("sidekick.cli.session").cwd()
     for _, t in ipairs(tools) do
-      if t.session and t.session.backend == "herdr" and t.session.cwd == cwd then
+      if
+        t.session
+        and t.session.backend == "herdr"
+        and (
+          (Config.cli.mux.create == "split" and t.session.herdr_token)
+          or (Config.cli.mux.create ~= "split" and t.session.cwd == cwd)
+        )
+      then
         on_select(t)
         return
       end
