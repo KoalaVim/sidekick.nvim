@@ -552,6 +552,16 @@ function M:focus()
   Util.exec({ "herdr", "agent", "focus", self.herdr_pane_id }, { notify = false })
 end
 
+--- Maximize a native pane, restore its layout, or toggle when no state is given.
+---@param enabled? boolean
+function M:zoom(enabled)
+  if self.herdr_embedded or not self.herdr_pane_id then
+    return
+  end
+  local mode = enabled == nil and "--toggle" or (enabled and "--on" or "--off")
+  Util.exec({ "herdr", "pane", "zoom", self.herdr_pane_id, mode }, { notify = true })
+end
+
 function M:send(text)
   if self.herdr_embedded then
     return -- the tool runs in a Neovim terminal; sending here would type into Neovim

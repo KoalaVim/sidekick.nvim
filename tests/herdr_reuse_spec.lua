@@ -98,6 +98,30 @@ describe("herdr split reuse", function()
     assert.are.equal("same", watched)
   end)
 
+  for _, case in ipairs({
+    { mode = "--toggle" },
+    { enabled = true, mode = "--on" },
+    { enabled = false, mode = "--off" },
+  }) do
+    it("zooms the explicit agent pane with " .. case.mode, function()
+      local command
+      Util.exec = function(cmd)
+        command = cmd
+      end
+      Herdr.zoom({ herdr_pane_id = "same" }, case.enabled)
+      assert.are.same({ "herdr", "pane", "zoom", "same", case.mode }, command)
+    end)
+  end
+
+  it("does not zoom Neovim's pane for an embedded terminal", function()
+    local called = false
+    Util.exec = function()
+      called = true
+    end
+    Herdr.zoom({ herdr_pane_id = "editor", herdr_embedded = true }, true)
+    assert.is_false(called)
+  end)
+
   for _, owned in ipairs({ true, false }) do
     it(
       owned and "reuses an owned pane despite a different cwd" or "creates a pane when none is sidekick-owned",
