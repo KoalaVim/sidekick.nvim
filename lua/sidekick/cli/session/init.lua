@@ -144,10 +144,12 @@ function M.setup()
       M.register(name, require(mod))
     end
   end
-  -- herdr is opt-in: once registered, `sessions()` would list every agent pane herdr
-  -- detects, including ones the user started outside of sidekick
-  if Config.cli.mux.enabled and Config.cli.mux.backend == "herdr" and vim.fn.executable("herdr") == 1 then
-    M.register("herdr", require("sidekick.cli.session.herdr"))
+  -- herdr and rex are opt-in: once registered, `sessions()` would list every agent pane
+  -- they detect, including ones the user started outside of sidekick
+  for _, name in ipairs({ "herdr", "rex" }) do
+    if Config.cli.mux.enabled and Config.cli.mux.backend == name and vim.fn.executable(name) == 1 then
+      M.register(name, require("sidekick.cli.session." .. name))
+    end
   end
   M.register("terminal", require("sidekick.cli.terminal"))
 end
@@ -170,7 +172,7 @@ function M.sessions()
       if M._attached[s.id] then
         M._attached[s.id] = ret[#ret] -- update to latest session instance
       end
-        ::continue::
+      ::continue::
     end
   end
   for id in pairs(M._attached) do
