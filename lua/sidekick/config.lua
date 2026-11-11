@@ -82,10 +82,11 @@ local defaults = {
       nav = nil,
     },
     ---@class sidekick.cli.Mux
-    ---@field backend? "tmux"|"zellij"|"herdr" Multiplexer backend to persist CLI sessions
+    ---@field backend? "tmux"|"zellij"|"herdr"|"rex" Multiplexer backend to persist CLI sessions
     mux = {
-      -- default to tmux unless zellij is detected, or herdr is the only multiplexer around
+      -- default to tmux unless zellij or rex is detected, or herdr is the only multiplexer around
       backend = vim.env.ZELLIJ and "zellij"
+        or (vim.env.REX_SESSION and not vim.env.TMUX) and "rex"
         or (vim.env.HERDR_ENV and not vim.env.TMUX) and "herdr"
         or "tmux",
       enabled = false,
@@ -98,6 +99,7 @@ local defaults = {
       -- natively -- Neovim gives its terminal child its own tty -- so sidekick reports the
       -- agent's state itself and herdr's session resume does not cover it.
       -- Use `split` or `window` for herdr's native detection, status and resume.
+      -- NOTE: rex can't run inside a Neovim terminal, so `terminal` behaves like `split`
       create = "terminal", ---@type "terminal"|"window"|"split"
       split = {
         vertical = true, -- vertical or horizontal split
@@ -241,7 +243,7 @@ function M.setup(opts)
     require("sidekick.status").setup()
 
     M.validate("cli.win.layout", { "float", "left", "bottom", "top", "right" })
-    M.validate("cli.mux.backend", { "tmux", "zellij", "herdr" })
+    M.validate("cli.mux.backend", { "tmux", "zellij", "herdr", "rex" })
     M.validate("cli.mux.create", { "terminal", "window", "split" })
     M.validate("nes.diff.show", { "always", "cursor" })
   end)
